@@ -1,0 +1,5 @@
+1. 可以一次 load 多個 input: ex: 100 個
+
+
+
+compile 時用 g++，所有.c 都要 compile 到
