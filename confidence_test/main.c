@@ -76,7 +76,10 @@ int main(int argc, char *argv[]) {
     // for counting the norm of each filter in conv2
     double norm_l1[40] = {0};
 
-    res result_list[2][10000];
+    res result_list[6][10000];
+    int accuracy[6];
+    int next_level_list[10000];
+    int next_level_idx = 0;
 
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 10000; ++j) {
@@ -128,20 +131,22 @@ int main(int argc, char *argv[]) {
     int class_list[10] = {0};
     int wrong_list[10] = {0};
 
-    for (int tt = 0; tt < 2; tt++) {
+    for (int tt = 0; tt < 6; tt++) {
 
         
         // set fp back to the head of file
         rewind(fp); 
         // select quant list
-        if (tt == 0) quant_list = &quant_2d_list[tt][0];
-        else {
-            quant_list = &quant_2d_list[5][0]; //drop 50%
-        }
+        // if (tt == 0) quant_list = &quant_2d_list[tt][0];
+        // else {
+        //     quant_list = &quant_2d_list[4][0]; //drop 50%
+        // }
+        quant_list = &quant_2d_list[tt][0];
         
 
         // initialize
         right = 0;    
+        next_level_idx = 0;
 
         printf("%d'th quant, quant list = ", tt);
         for (int i = 0; i < 40; ++i) {
@@ -282,6 +287,7 @@ int main(int argc, char *argv[]) {
             
         }
         //printf("right cnt = %d\n",right);
+        accuracy[tt] = right;
         printf("accuracy = %f\n", ((float)right)/in_num);
 
 
@@ -322,6 +328,62 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // printf("\nEnter sample number: (enter ctrl^z to exit)\n");
+    // int sample_num;
+    // while(scanf("%d",&sample_num) != -1) {
+    //     printf("input sample %d\n",sample_num);
+    //     printf("no drop:\n");
+    //     printf("pred = %d, ans = %d, res = %d, core_margin = %d\n", result_list[0][sample_num].pred, result_list[0][sample_num].ans, result_list[0][sample_num].res, result_list[0][sample_num].core_margin);
+    //     // for (int i = 0; i < 10; ++i) {
+    //     //     printf("%d: %d\n", i, result_list[0][sample_num].pred_list[i]);
+    //     // }
+    //     printf("drop:\n");
+    //     printf("pred = %d, ans = %d, res = %d, core_margin = %d\n", result_list[1][sample_num].pred, result_list[1][sample_num].ans, result_list[1][sample_num].res, result_list[1][sample_num].core_margin);
+    //     // for (int i = 0; i < 10; ++i) {
+    //     //     printf("%d: %d\n", i, result_list[1][sample_num].pred_list[i]);
+    //     // }
+    // }
+    // printf("no drop core margin:\n");
+    // for (int i = 0; i < in_num; ++i) {
+    //     printf("%dth: %d ", i, result_list[0][i].core_margin);
+    // }
+    // printf("\n");
+    // printf("drop core margin:\n");
+    // for (int i = 0; i < in_num; ++i) {
+    //     printf("%dth: %d ", i, result_list[1][i].core_margin);
+    // }
+
+    printf("\nEnter threshold: (enter ctrl^z to exit)\n");
+    int threshold = 0;
+    while(scanf("%d", &threshold) != -1) {
+        int TT = 0, FT = 0, TF = 0, FF = 0;
+
+
+        printf("those input's core_margin is below the threshold %d:\n", threshold);
+        for (int i = 0; i < in_num; ++i) {
+            if (result_list[1][i].core_margin <= threshold) {
+                //printf("%d ", i);
+                if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //抓出來了
+                    TT ++;
+                } else if (result_list[1][i].res == 1 && result_list[0][i].res == 1) { //多抓
+                    TF ++;
+                } else { 
+                    FF ++; //只是用來統計有多少 input 的 confidence 是不夠的
+                }
+                next_level_list[next_level_idx++] = i; // 表達有那些 input 可以進到下一輪
+            } else {
+                if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //漏抓
+                    FT ++;
+                }
+            }
+        }
+        printf("\ndiff between drop and non-drop = %d\n", accuracy[0] - accuracy[1]);
+        printf("%d input's confidence is below threshold", TT + TF + FF);
+        printf("\nTT = %d (%f), TF = %d (%f), FT = %d (%f)", TT, ((float)TT/(accuracy[0] - accuracy[1])), TF, ((float)TF/(accuracy[0] - accuracy[1])), FT, ((float)FT/(accuracy[0] - accuracy[1])));
+        printf("\n\n");
+
+    }
+
     printf("\nEnter sample number: (enter ctrl^z to exit)\n");
     int sample_num;
     while(scanf("%d",&sample_num) != -1) {
@@ -339,12 +401,12 @@ int main(int argc, char *argv[]) {
     }
     printf("no drop core margin:\n");
     for (int i = 0; i < in_num; ++i) {
-        printf("sample %dth core_margin %d", i, result_list[0][sample_num].core_margin);
+        printf("%dth: %d ", i, result_list[0][i].core_margin);
     }
     printf("\n");
     printf("drop core margin:\n");
     for (int i = 0; i < in_num; ++i) {
-        printf("sample %dth core_margin %d", i, result_list[1][sample_num].core_margin);
+        printf("%dth: %d ", i, result_list[1][i].core_margin);
     }
     
 
