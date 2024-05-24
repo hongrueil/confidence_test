@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 #include "inference/nn.h"
 /************* input **************/
 /*
@@ -23,10 +24,13 @@ which has 10000 test data from mnist
 //#define conv
 //#define norm
 //#define norm_l2
+#define ENTROPY
+//#define CORE_MARGIN
 
 typedef struct res {
     bool res;
     int core_margin;
+    float entropy;
     int pred;
     int ans;
     int pred_list[10];
@@ -60,8 +64,11 @@ Buffer bufferB_tensor = {
     .data = (fixed *)bufferB_data
 };
 
+// too big, need to place in global or using malloc
+res result_list[6][10000];
 
 int main(int argc, char *argv[]) {
+    
     int right = 0;
 
     Buffer *bufferA, *bufferB;
@@ -76,15 +83,15 @@ int main(int argc, char *argv[]) {
     // for counting the norm of each filter in conv2
     double norm_l1[40] = {0};
 
-    res result_list[6][10000];
     int accuracy[6];
-    int next_level_list[10000];
-    int next_level_idx = 0;
+
+
 
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 10000; ++j) {
             result_list[i][j].res = false;
             result_list[i][j].core_margin = 0;
+            result_list[i][j].entropy = 0;
         }
     }
 
@@ -114,7 +121,7 @@ int main(int argc, char *argv[]) {
     // for (int i = 0; i < 40; ++i) printf("%d, ",quant_list[i]);
 
 
-
+   
 
     FILE *fp = fopen("./dataset/input/mnist_test.csv", "r");
     if (fp == NULL) {
@@ -132,6 +139,7 @@ int main(int argc, char *argv[]) {
     int wrong_list[10] = {0};
 
     for (int tt = 0; tt < 6; tt++) {
+        
 
         
         // set fp back to the head of file
@@ -146,7 +154,7 @@ int main(int argc, char *argv[]) {
 
         // initialize
         right = 0;    
-        next_level_idx = 0;
+
 
         printf("%d'th quant, quant list = ", tt);
         for (int i = 0; i < 40; ++i) {
@@ -255,12 +263,11 @@ int main(int argc, char *argv[]) {
             if (prediction == ans) {
                 right++; 
                 result_list[tt][i].res = true;
-                //printf(" result: true\n");
             } else {
-                //printf(" result: false\n");  
+                result_list[tt][i].res = false;
             }
             
-            //caculate confidence using core margin
+            /********************* caculate confidence using core margin ***********************/
             int first = 0, second = 0;
             //float entropy = 0;
             for (int k = 0; k < 10; ++k) {
@@ -274,37 +281,48 @@ int main(int argc, char *argv[]) {
             }
             result_list[tt][i].core_margin = first - second;
             //printf("core margin = %d\n", result_list[tt][i].core_margin);
+            /***********************************************************************************/
 
-            // class_list[ans]++;
-            // if (prediction == ans) {
-            //     // right ans
-            //     right++;  
-            // } else {
-            //     //wrong ans
-            //     wrong_list[ans]++;
 
-            // }
+            /********************* caculate softmax, then caculate entropy *********************/
+            //caculate softmax, then caculate entropy
+            float soft_max_vec[10] = {0};
+            float soft_max_sum = 0;
+
+            //printf("output vec turn back to float: [ ");
+            for (int k = 0; k < 10; ++k) {
+                //printf("%f, ",(float)bufferB->data[k] / 32768);
+                soft_max_vec[k] = expf((float)bufferB->data[k] / 32768);
+                soft_max_sum +=  soft_max_vec[k];
+                //printf("%d, ",bufferB->data[k] - first);
+            }
+            //printf("]\n");
+            //printf("soft_max_sum = %f\n",soft_max_sum);
+            //printf("soft_max: [ ");
+            for (int k = 0; k < 10; ++k) {
+                soft_max_vec[k] = expf(((float)bufferB->data[k] / 32768) - log(soft_max_sum));
+                //printf("%f, ", soft_max_vec[k]);
+            }
+            //printf("]\n");
+
+            float entropy = 0;
+            for (int k = 0; k < 10; ++k) {
+                entropy += (soft_max_vec[k] * -1 * log(soft_max_vec[k]));
+                //printf("softmax_now = %f, entropy now = %f\n",soft_max_vec[k], (soft_max_vec[k] * -1 * log(soft_max_vec[k])));
+                //printf("entropy now = %f\n",entropy);
+            }
+            
+            //printf("entropy = %f\n",entropy);
+            result_list[tt][i].entropy = entropy;
+            /***********************************************************************************/
+
+
+
             
         }
         //printf("right cnt = %d\n",right);
         accuracy[tt] = right;
         printf("accuracy = %f\n", ((float)right)/in_num);
-
-
-
-
-    #if defined(norm) || defined(norm_l2)
-    /********* print norm l1 ***********/
-        for (int i = 0; i < 40; ++i) {
-            //printf("Norm l1_list[%d] = %lf\n",i, norm_l1[i]);
-            printf("%lf\n",norm_l1[i]);
-        }
-        for (int i = 0; i < 40; ++i) {
-        // printf("Norm l1_list[%d] = %lf\n",i, norm_l1[i]);
-        printf("%lf,",norm_l1[i]);
-        }
-    #endif
-
 
 
     }
@@ -313,20 +331,251 @@ int main(int argc, char *argv[]) {
 
 
 
-    // partial right, full right
-    printf("\npartial right, full right:\n");
-    for (int i = 0; i < in_num; ++i) {
-        if (result_list[0][i].res == true && result_list[1][i].res == true) {
-            printf("%d ",i);
+   // partial right, full right
+    // printf("\npartial right, full right:\n");
+    // for (int i = 0; i < in_num; ++i) {
+    //     if (result_list[0][i].res == true && result_list[1][i].res == true) {
+    //         printf("%d ",i);
+    //     }
+    // }
+    // // partial false, full right
+    // printf("\npartial false, full right:\n");
+    // for (int i = 0; i < in_num; ++i) {
+    //     if (result_list[0][i].res == true && result_list[1][i].res == false) {
+    //         printf("%d ",i);
+    //     }
+    // }
+#ifdef CORE_MARGIN
+/************************* incremental confidence test *********************************/
+    int next_level_list[10000]; //how many input will go to next level
+    int next_level_idx = 0;
+    int next_level_size = in_num;
+
+    while (1) {
+
+        // next_level_list initial
+        for (int i = 0; i < in_num; ++i) next_level_list[i] = i;
+        next_level_idx = 0;
+        next_level_size = in_num;
+
+        // cnt for this threshold combination
+        int total_miss_catch = 0;
+        int num_over_in_level[6] = {0};
+        int miss_in_level[6] = {0};
+        int over_catch_in_level[6] = {0};
+        int thres[6] = {0};
+
+
+        for (int level = 5; level > 0; --level) {
+            next_level_idx = 0;
+            printf("\nLevel %d, input cnt = %d\n", level, next_level_size);
+            printf("Enter threshold of level %d: ", level);
+            int threshold;
+            int TT = 0, FT = 0, TF = 0, FF = 0; // TT: 抓對的, FT: 多抓的, FF: 不屬於上面兩種，但還是被抓到的, FT 漏抓的
+            scanf("%d", &threshold);
+            thres[level] = threshold;
+            for (int i = 0; i < next_level_size; ++i) { //iter through this level's input, next_level_list[i] == input's num
+                //printf("%d ",next_level_list[i]);
+                if (result_list[level][next_level_list[i]].core_margin <= threshold) { //會進到 next_level 的
+                    
+                    next_level_list[next_level_idx++] = next_level_list[i];
+                    if (result_list[level][next_level_list[i]].res == 0 && result_list[0][next_level_list[i]].res == 1) { //抓出來了
+                        TT ++;
+                    } else if (result_list[level][next_level_list[i]].res == 1 && result_list[0][next_level_list[i]].res == 1) { //多抓
+                        TF ++;
+                    } else { 
+                        FF ++; //只是用來統計有多少 input 的 confidence 是不夠的
+                    }
+
+                } else { //不會進到下一層的
+                    if (result_list[level][next_level_list[i]].res == 0 && result_list[0][next_level_list[i]].res == 1) { //漏抓
+                        FT ++;
+                    }
+                }
+            }
+            total_miss_catch += FT;
+            miss_in_level[level] = FT;
+            over_catch_in_level[level] = TF;
+            num_over_in_level[level] = next_level_size - (TT + TF + FF);
+            printf("\n");
+            printf("Input over in this level: %d\n", next_level_size - (TT + TF + FF));
+            next_level_size = next_level_idx;
+            next_level_idx = 0;
+            //printf("next_level_size = %d\n", next_level_size);
+            
+            printf("Input go to next level: %d\n", TT + TF + FF);
+            printf("right_catch : %d, over_catch: %d, miss_catch: %d\n", TT, TF, FT);
+
+
+            
         }
-    }
-    // partial false, full right
-    printf("\npartial false, full right:\n");
-    for (int i = 0; i < in_num; ++i) {
-        if (result_list[0][i].res == true && result_list[1][i].res == false) {
-            printf("%d ",i);
+        printf("\nSummarize for this threshold combination: \n");
+        for (int i = 5; i > 0; i--) {
+            printf("threshold of level %d: %d\n", i, thres[i]);
         }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total input over in level %d : %d\n", i, num_over_in_level[i]);
+        }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total over_catch in level %d : %d\n", i, over_catch_in_level[i]);
+        }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total miss in level %d : %d\n", i, miss_in_level[i]);
+        }
+        printf("total miss catch : %d\n", total_miss_catch);
+
+        printf("----------------------------------------\n\n");
+
+
     }
+
+/***************************************************************************************/
+#endif
+
+#ifdef ENTROPY
+/************************* incremental confidence test *********************************/
+    int next_level_list[10000]; //how many input will go to next level
+    int next_level_idx = 0;
+    int next_level_size = in_num;
+
+    while (1) {
+
+        // next_level_list initial
+        for (int i = 0; i < in_num; ++i) next_level_list[i] = i;
+        next_level_idx = 0;
+        next_level_size = in_num;
+
+        // cnt for this threshold combination
+        int total_miss_catch = 0;
+        int num_over_in_level[6] = {0};
+        int miss_in_level[6] = {0};
+        int over_catch_in_level[6] = {0};
+        float thres[6] = {0};
+
+
+        for (int level = 5; level > 0; --level) {
+            next_level_idx = 0;
+            printf("\nLevel %d, input cnt = %d\n", level, next_level_size);
+            printf("Enter threshold of level %d: ", level);
+            // int threshold;
+            float threshold;
+            int TT = 0, FT = 0, TF = 0, FF = 0; // TT: 抓對的, FT: 多抓的, FF: 不屬於上面兩種，但還是被抓到的, FT 漏抓的
+            scanf("%f", &threshold);
+            thres[level] = threshold;
+            for (int i = 0; i < next_level_size; ++i) { //iter through this level's input, next_level_list[i] == input's num
+                //printf("%d ",next_level_list[i]);
+                if (result_list[level][next_level_list[i]].entropy >= threshold) { //會進到 next_level 的
+                    
+                    next_level_list[next_level_idx++] = next_level_list[i];
+                    if (result_list[level][next_level_list[i]].res == 0 && result_list[0][next_level_list[i]].res == 1) { //抓出來了
+                        TT ++;
+                    } else if (result_list[level][next_level_list[i]].res == 1 && result_list[0][next_level_list[i]].res == 1) { //多抓
+                        TF ++;
+                    } else { 
+                        FF ++; //只是用來統計有多少 input 的 confidence 是不夠的
+                    }
+
+                } else { //不會進到下一層的
+                    if (result_list[level][next_level_list[i]].res == 0 && result_list[0][next_level_list[i]].res == 1) { //漏抓
+                        FT ++;
+                    }
+                }
+            }
+            total_miss_catch += FT;
+            miss_in_level[level] = FT;
+            over_catch_in_level[level] = TF;
+            num_over_in_level[level] = next_level_size - (TT + TF + FF);
+            printf("\n");
+            printf("Input over in this level: %d\n", next_level_size - (TT + TF + FF));
+            next_level_size = next_level_idx;
+            next_level_idx = 0;
+            //printf("next_level_size = %d\n", next_level_size);
+            
+            printf("Input go to next level: %d\n", TT + TF + FF);
+            printf("right_catch : %d, over_catch: %d, miss_catch: %d\n", TT, TF, FT);
+
+
+            
+        }
+        printf("\nSummarize for this threshold combination: \n");
+        for (int i = 5; i > 0; i--) {
+            printf("threshold of level %d: %f\n", i, thres[i]);
+        }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total input over in level %d : %d\n", i, num_over_in_level[i]);
+        }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total over_catch in level %d : %d\n", i, over_catch_in_level[i]);
+        }
+        printf("\n");
+        for (int i = 5; i > 0; i--) {
+            printf("Total miss in level %d : %d\n", i, miss_in_level[i]);
+        }
+        printf("total miss catch : %d\n", total_miss_catch);
+
+        printf("----------------------------------------\n\n");
+
+
+    }
+
+/***************************************************************************************/
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // printf("\nEnter threshold: (enter ctrl^z to exit)\n");
+    // int threshold = 0;
+    // while(scanf("%d", &threshold) != -1) {
+    //     int TT = 0, FT = 0, TF = 0, FF = 0;
+
+
+    //     printf("those input's core_margin is below the threshold %d:\n", threshold);
+    //     for (int i = 0; i < in_num; ++i) {
+    //         if (result_list[1][i].core_margin <= threshold) {
+    //             //printf("%d ", i);
+    //             if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //抓出來了
+    //                 TT ++;
+    //             } else if (result_list[1][i].res == 1 && result_list[0][i].res == 1) { //多抓
+    //                 TF ++;
+    //             } else { 
+    //                 FF ++; //只是用來統計有多少 input 的 confidence 是不夠的
+    //             }
+    //             //next_level_list[next_level_idx++] = i; // 表達有那些 input 可以進到下一輪
+    //         } else {
+    //             if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //漏抓
+    //                 FT ++;
+    //             }
+    //         }
+    //     }
+    //     printf("\ndiff between drop and non-drop = %d\n", accuracy[0] - accuracy[1]);
+    //     printf("%d input's confidence is below threshold", TT + TF + FF);
+    //     printf("\nTT = %d (%f), TF = %d (%f), FT = %d (%f)", TT, ((float)TT/(accuracy[0] - accuracy[1])), TF, ((float)TF/(accuracy[0] - accuracy[1])), FT, ((float)FT/(accuracy[0] - accuracy[1])));
+    //     printf("\n\n");
+
+    // }
 
     // printf("\nEnter sample number: (enter ctrl^z to exit)\n");
     // int sample_num;
@@ -352,65 +601,9 @@ int main(int argc, char *argv[]) {
     // for (int i = 0; i < in_num; ++i) {
     //     printf("%dth: %d ", i, result_list[1][i].core_margin);
     // }
-
-    printf("\nEnter threshold: (enter ctrl^z to exit)\n");
-    int threshold = 0;
-    while(scanf("%d", &threshold) != -1) {
-        int TT = 0, FT = 0, TF = 0, FF = 0;
-
-
-        printf("those input's core_margin is below the threshold %d:\n", threshold);
-        for (int i = 0; i < in_num; ++i) {
-            if (result_list[1][i].core_margin <= threshold) {
-                //printf("%d ", i);
-                if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //抓出來了
-                    TT ++;
-                } else if (result_list[1][i].res == 1 && result_list[0][i].res == 1) { //多抓
-                    TF ++;
-                } else { 
-                    FF ++; //只是用來統計有多少 input 的 confidence 是不夠的
-                }
-                next_level_list[next_level_idx++] = i; // 表達有那些 input 可以進到下一輪
-            } else {
-                if (result_list[1][i].res == 0 && result_list[0][i].res == 1) { //漏抓
-                    FT ++;
-                }
-            }
-        }
-        printf("\ndiff between drop and non-drop = %d\n", accuracy[0] - accuracy[1]);
-        printf("%d input's confidence is below threshold", TT + TF + FF);
-        printf("\nTT = %d (%f), TF = %d (%f), FT = %d (%f)", TT, ((float)TT/(accuracy[0] - accuracy[1])), TF, ((float)TF/(accuracy[0] - accuracy[1])), FT, ((float)FT/(accuracy[0] - accuracy[1])));
-        printf("\n\n");
-
-    }
-
-    printf("\nEnter sample number: (enter ctrl^z to exit)\n");
-    int sample_num;
-    while(scanf("%d",&sample_num) != -1) {
-        printf("input sample %d\n",sample_num);
-        printf("no drop:\n");
-        printf("pred = %d, ans = %d, res = %d, core_margin = %d\n", result_list[0][sample_num].pred, result_list[0][sample_num].ans, result_list[0][sample_num].res, result_list[0][sample_num].core_margin);
-        // for (int i = 0; i < 10; ++i) {
-        //     printf("%d: %d\n", i, result_list[0][sample_num].pred_list[i]);
-        // }
-        printf("drop:\n");
-        printf("pred = %d, ans = %d, res = %d, core_margin = %d\n", result_list[1][sample_num].pred, result_list[1][sample_num].ans, result_list[1][sample_num].res, result_list[1][sample_num].core_margin);
-        // for (int i = 0; i < 10; ++i) {
-        //     printf("%d: %d\n", i, result_list[1][sample_num].pred_list[i]);
-        // }
-    }
-    printf("no drop core margin:\n");
-    for (int i = 0; i < in_num; ++i) {
-        printf("%dth: %d ", i, result_list[0][i].core_margin);
-    }
-    printf("\n");
-    printf("drop core margin:\n");
-    for (int i = 0; i < in_num; ++i) {
-        printf("%dth: %d ", i, result_list[1][i].core_margin);
-    }
     
 
-        
+       
 
     return 0;
 }
